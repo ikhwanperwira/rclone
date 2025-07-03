@@ -716,6 +716,14 @@ func (f *File) Remove() (err error) {
 
 	// Check if trash directory is configured
 	if d.vfs.Opt.TrashDir != "" {
+		// Check if file is already in trash directory (moved as part of directory operation)
+		filePath := f.Path()
+		trashPath := d.vfs.Opt.TrashDir + "/"
+		if strings.HasPrefix(filePath, trashPath) {
+			fs.Debugf(filePath, "File is already in trash directory, skipping move")
+			return nil
+		}
+		
 		// Try to move to trash first
 		err = f.moveToTrash()
 		if err != nil {

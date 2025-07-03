@@ -1155,12 +1155,14 @@ func (d *Dir) Remove() error {
 	// Check if trash directory is configured
 	if d.vfs.Opt.TrashDir != "" {
 		// Try to move to trash first
+		fs.Debugf(d.Path(), "Attempting to move directory to trash")
 		err := d.moveToTrash()
 		if err != nil {
-			fs.Errorf(d, "Failed to move directory to trash, proceeding with delete: %v", err)
+			fs.Errorf(d, "Failed to move directory to trash, proceeding with normal delete: %v", err)
 			// Continue with normal deletion if trash move fails
 		} else {
 			// Successfully moved to trash, remove from parent listing
+			fs.Debugf(d.Path(), "Successfully moved directory to trash")
 			if d.parent != nil {
 				d.parent.delObject(d.Name())
 			}
@@ -1168,7 +1170,7 @@ func (d *Dir) Remove() error {
 		}
 	}
 
-	// Check directory is empty first
+	// Check directory is empty first (only for normal deletion, not trash)
 	empty, err := d.isEmpty()
 	if err != nil {
 		fs.Errorf(d, "Dir.Remove dir error: %v", err)
@@ -1200,12 +1202,14 @@ func (d *Dir) RemoveAll() error {
 	// Check if trash directory is configured
 	if d.vfs.Opt.TrashDir != "" {
 		// Try to move to trash first (this will move the whole tree)
+		fs.Debugf(d.Path(), "Attempting to move directory tree to trash")
 		err := d.moveToTrash()
 		if err != nil {
-			fs.Errorf(d, "Failed to move directory to trash, proceeding with delete: %v", err)
+			fs.Errorf(d, "Failed to move directory to trash, proceeding with individual file deletion: %v", err)
 			// Continue with normal deletion if trash move fails
 		} else {
 			// Successfully moved to trash, remove from parent listing
+			fs.Debugf(d.Path(), "Successfully moved entire directory tree to trash")
 			if d.parent != nil {
 				d.parent.delObject(d.Name())
 			}
@@ -1213,7 +1217,8 @@ func (d *Dir) RemoveAll() error {
 		}
 	}
 
-	// Remove contents of the directory
+	// Remove contents of the directory (only reached if trash move failed or trash not configured)
+	fs.Debugf(d.Path(), "Processing directory contents individually")
 	nodes, err := d.ReadDirAll()
 	if err != nil {
 		fs.Errorf(d, "Dir.RemoveAll failed to read directory: %v", err)
