@@ -1102,55 +1102,22 @@ func (d *Dir) Mkdir(name string) (*Dir, error) {
 	return dir, nil
 }
 
-// moveToTrash moves a directory to the trash directory if configured
+// moveToTrash moves a directory to the trash directory
 func (d *Dir) moveToTrash() error {
 	vfs := d.vfs
-	if vfs.Opt.TrashDir == "" {
-		return nil // No trash dir configured, caller should proceed with normal delete
-	}
 
-	// Build the trash path, preserving the relative path structure
-	dirPath := d.Path()
-	trashPath := filepath.Join(vfs.Opt.TrashDir, dirPath)
+	// Create unique timestamp-based name for the directory
+	timestamp := time.Now().Format("20060102_150405_000")
+	dirName := filepath.Base(d.Path())
+	uniqueName := fmt.Sprintf("%s_%s", timestamp, dirName)
 
-	// Get the root directory to perform operations
-	root, err := vfs.Root()
-	if err != nil {
-		return fmt.Errorf("failed to get VFS root: %v", err)
-	}
-
-	// Get the trash parent directory and create it if needed
-	trashParentPath := filepath.Dir(trashPath)
-	var trashParentDir *Dir = root
-
-	// Navigate/create the trash directory structure
-	if trashParentPath != "" && trashParentPath != "." {
-		parts := strings.Split(filepath.ToSlash(trashParentPath), "/")
-		for _, part := range parts {
-			if part == "" {
-				continue
-			}
-			nextDir, err := trashParentDir.stat(part)
-			if err == ENOENT {
-				// Directory doesn't exist, create it
-				trashParentDir, err = trashParentDir.Mkdir(part)
-				if err != nil {
-					return fmt.Errorf("failed to create trash directory %q: %v", part, err)
-				}
-			} else if err != nil {
-				return fmt.Errorf("failed to stat trash directory %q: %v", part, err)
-			} else if !nextDir.IsDir() {
-				return fmt.Errorf("trash path component %q exists but is not a directory", part)
-			} else {
-				trashParentDir = nextDir.(*Dir)
-			}
-		}
-	}
+	// Build the trash path with unique name
+	trashPath := filepath.Join(vfs.Opt.TrashDir, uniqueName)
 
 	// Move the directory to trash using DirMove
 	srcRemote := d.Path()
 	dstRemote := trashPath
-	err = operations.DirMove(context.TODO(), d.f, srcRemote, dstRemote)
+	err := operations.DirMove(context.TODO(), d.f, srcRemote, dstRemote)
 	if err != nil {
 		return fmt.Errorf("failed to move directory to trash: %v", err)
 	}
