@@ -1,0 +1,111 @@
+name: Test Trash Feature
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+  workflow_dispatch:
+    inputs:
+      manual:
+        description: Manual test run
+        type: boolean
+        default: true
+
+jobs:
+  test-trash-feature:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        go-version: ['1.21']
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ matrix.go-version }}
+
+    - name: Install dependencies (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        sudo modprobe fuse
+        sudo chmod 666 /dev/fuse
+        sudo apt-get update
+        sudo apt-get install -y fuse3 libfuse-dev
+
+    - name: Install dependencies (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        brew install --cask macfuse
+
+    - name: Install dependencies (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        choco install -y winfsp
+
+    - name: Cache Go modules
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/go/pkg/mod
+          ~/.cache/go-build
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+
+    - name: Get dependencies
+      run: go mod download
+
+    - name: Build rclone with trash feature
+      run: |
+        go build -v -ldflags "-X github.com/rclone/rclone/fs.Version=trash-feature-$(git rev-parse --short HEAD)" .
+
+    - name: Test trash flag availability (Unix)
+      if: runner.os != 'Windows'
+      run: |
+        echo "Testing if --trash-dir flag is available..."
+        if ./rclone mount --help | grep -q "trash-dir"; then
+          echo "✅ SUCCESS: --trash-dir flag found in help output"
+        else
+          echo "❌ FAIL: --trash-dir flag not found in help output"
+          exit 1
+        fi
+
+    - name: Test trash flag availability (Windows)
+      if: runner.os == 'Windows'
+      shell: cmd
+      run: |
+        echo Testing if --trash-dir flag is available...
+        rclone.exe mount --help | findstr "trash-dir" >nul
+        if %errorlevel% == 0 (
+          echo ✅ SUCCESS: --trash-dir flag found in help output
+        ) else (
+          echo ❌ FAIL: --trash-dir flag not found in help output
+          exit /b 1
+        )
+
+    - name: Show trash flag help (Unix)
+      if: runner.os != 'Windows'
+      run: |
+        echo "Showing trash-dir flag documentation:"
+        ./rclone mount --help | grep -A 2 -B 2 "trash-dir" || true
+
+    - name: Show trash flag help (Windows)
+      if: runner.os == 'Windows'
+      shell: cmd
+      run: |
+        echo Showing trash-dir flag documentation:
+        rclone.exe mount --help | findstr /C:"trash-dir" || echo No additional context found
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: rclone-trash-feature-${{ matrix.os }}
+        path: |
+          rclone*
+          !rclone_test.exe
+        retention-days: 3
