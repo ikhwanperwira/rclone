@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -662,6 +663,62 @@ func (f *File) Sync() error {
 	return nil
 }
 
+// moveToTrash moves a file or directory to the trash directory if configured
+func (f *File) moveToTrash() error {
+	vfs := f.d.vfs
+	if vfs.Opt.TrashDir == "" {
+		return nil // No trash dir configured, caller should proceed with normal delete
+	}
+
+	// Build the trash path, preserving the relative path structure
+	filePath := f.Path()
+	trashPath := filepath.Join(vfs.Opt.TrashDir, filePath)
+
+	// Get the root directory to perform operations
+	root, err := vfs.Root()
+	if err != nil {
+		return fmt.Errorf("failed to get VFS root: %v", err)
+	}
+
+	// Get the trash parent directory and create it if needed
+	trashParentPath := filepath.Dir(trashPath)
+	var trashParentDir *Dir = root
+
+	// Navigate/create the trash directory structure
+	if trashParentPath != "" && trashParentPath != "." {
+		parts := strings.Split(filepath.ToSlash(trashParentPath), "/")
+		for _, part := range parts {
+			if part == "" {
+				continue
+			}
+			nextDir, err := trashParentDir.stat(part)
+			if err == ENOENT {
+				// Directory doesn't exist, create it
+				trashParentDir, err = trashParentDir.Mkdir(part)
+				if err != nil {
+					return fmt.Errorf("failed to create trash directory %q: %v", part, err)
+				}
+			} else if err != nil {
+				return fmt.Errorf("failed to stat trash directory %q: %v", part, err)
+			} else if !nextDir.IsDir() {
+				return fmt.Errorf("trash path component %q exists but is not a directory", part)
+			} else {
+				trashParentDir = nextDir.(*Dir)
+			}
+		}
+	}
+
+	// Move the file to trash using rename
+	trashLeaf := filepath.Base(trashPath)
+	err = f.rename(context.TODO(), trashParentDir, trashLeaf)
+	if err != nil {
+		return fmt.Errorf("failed to move file to trash: %v", err)
+	}
+
+	fs.Debugf(f.Path(), "Moved to trash: %s", trashPath)
+	return nil
+}
+
 // Remove the file
 func (f *File) Remove() (err error) {
 	defer log.Trace(f.Path(), "")("err=%v", &err)
@@ -671,6 +728,19 @@ func (f *File) Remove() (err error) {
 
 	if d.vfs.Opt.ReadOnly {
 		return EROFS
+	}
+
+	// Check if trash directory is configured
+	if d.vfs.Opt.TrashDir != "" {
+		// Try to move to trash first
+		err = f.moveToTrash()
+		if err != nil {
+			fs.Errorf(f.Path(), "Failed to move to trash, proceeding with delete: %v", err)
+			// Continue with normal deletion if trash move fails
+		} else {
+			// Successfully moved to trash, we're done
+			return nil
+		}
 	}
 
 	// Remove the object from the cache

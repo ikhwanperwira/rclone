@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -1101,11 +1102,85 @@ func (d *Dir) Mkdir(name string) (*Dir, error) {
 	return dir, nil
 }
 
+// moveToTrash moves a directory to the trash directory if configured
+func (d *Dir) moveToTrash() error {
+	vfs := d.vfs
+	if vfs.Opt.TrashDir == "" {
+		return nil // No trash dir configured, caller should proceed with normal delete
+	}
+
+	// Build the trash path, preserving the relative path structure
+	dirPath := d.Path()
+	trashPath := filepath.Join(vfs.Opt.TrashDir, dirPath)
+
+	// Get the root directory to perform operations
+	root, err := vfs.Root()
+	if err != nil {
+		return fmt.Errorf("failed to get VFS root: %v", err)
+	}
+
+	// Get the trash parent directory and create it if needed
+	trashParentPath := filepath.Dir(trashPath)
+	var trashParentDir *Dir = root
+
+	// Navigate/create the trash directory structure
+	if trashParentPath != "" && trashParentPath != "." {
+		parts := strings.Split(filepath.ToSlash(trashParentPath), "/")
+		for _, part := range parts {
+			if part == "" {
+				continue
+			}
+			nextDir, err := trashParentDir.stat(part)
+			if err == ENOENT {
+				// Directory doesn't exist, create it
+				trashParentDir, err = trashParentDir.Mkdir(part)
+				if err != nil {
+					return fmt.Errorf("failed to create trash directory %q: %v", part, err)
+				}
+			} else if err != nil {
+				return fmt.Errorf("failed to stat trash directory %q: %v", part, err)
+			} else if !nextDir.IsDir() {
+				return fmt.Errorf("trash path component %q exists but is not a directory", part)
+			} else {
+				trashParentDir = nextDir.(*Dir)
+			}
+		}
+	}
+
+	// Move the directory to trash using DirMove
+	srcRemote := d.Path()
+	dstRemote := trashPath
+	err = operations.DirMove(context.TODO(), d.f, srcRemote, dstRemote)
+	if err != nil {
+		return fmt.Errorf("failed to move directory to trash: %v", err)
+	}
+
+	fs.Debugf(d.Path(), "Moved directory to trash: %s", trashPath)
+	return nil
+}
+
 // Remove the directory
 func (d *Dir) Remove() error {
 	if d.vfs.Opt.ReadOnly {
 		return EROFS
 	}
+
+	// Check if trash directory is configured
+	if d.vfs.Opt.TrashDir != "" {
+		// Try to move to trash first
+		err := d.moveToTrash()
+		if err != nil {
+			fs.Errorf(d, "Failed to move directory to trash, proceeding with delete: %v", err)
+			// Continue with normal deletion if trash move fails
+		} else {
+			// Successfully moved to trash, remove from parent listing
+			if d.parent != nil {
+				d.parent.delObject(d.Name())
+			}
+			return nil
+		}
+	}
+
 	// Check directory is empty first
 	empty, err := d.isEmpty()
 	if err != nil {
@@ -1134,6 +1209,23 @@ func (d *Dir) RemoveAll() error {
 	if d.vfs.Opt.ReadOnly {
 		return EROFS
 	}
+
+	// Check if trash directory is configured
+	if d.vfs.Opt.TrashDir != "" {
+		// Try to move to trash first (this will move the whole tree)
+		err := d.moveToTrash()
+		if err != nil {
+			fs.Errorf(d, "Failed to move directory to trash, proceeding with delete: %v", err)
+			// Continue with normal deletion if trash move fails
+		} else {
+			// Successfully moved to trash, remove from parent listing
+			if d.parent != nil {
+				d.parent.delObject(d.Name())
+			}
+			return nil
+		}
+	}
+
 	// Remove contents of the directory
 	nodes, err := d.ReadDirAll()
 	if err != nil {

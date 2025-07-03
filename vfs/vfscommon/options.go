@@ -168,7 +168,12 @@ var OptionsInfo = fs.Options{{
 }, {
 	Name:    "vfs_metadata_extension",
 	Default: "",
-	Help:    "Set the extension to read metadata from.",
+	Help:    "Set the extension to read metadata from",
+	Groups:  "VFS",
+}, {
+	Name:    "trash_dir",
+	Default: "",
+	Help:    "Directory to move deleted files to instead of deleting them",
 	Groups:  "VFS",
 }}
 
@@ -210,6 +215,7 @@ type Options struct {
 	FastFingerprint    bool          `config:"vfs_fast_fingerprint"` // if set use fast fingerprints
 	DiskSpaceTotalSize fs.SizeSuffix `config:"vfs_disk_space_total_size"`
 	MetadataExtension  string        `config:"vfs_metadata_extension"` // if set respond to files with this extension with metadata
+	TrashDir           string        `config:"trash_dir"`              // if set, move deleted files here instead of deleting
 }
 
 // Opt is the default options modified by the environment variables and command line flags
