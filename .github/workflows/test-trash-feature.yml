@@ -62,7 +62,23 @@ jobs:
 
     - name: Build rclone with trash feature
       run: |
-        go build -v -ldflags "-X github.com/rclone/rclone/fs.Version=trash-feature-$(git rev-parse --short HEAD)" .
+        go build -v -trimpath -ldflags "-s -X github.com/rclone/rclone/fs.Version=trash-feature-$(git rev-parse --short HEAD)" .
+
+    - name: Check binary size (Unix)
+      if: runner.os != 'Windows'
+      run: |
+        echo "Binary size information:"
+        ls -lh rclone
+        echo "Size in MB: $(du -m rclone | cut -f1)"
+
+    - name: Check binary size (Windows)
+      if: runner.os == 'Windows'
+      shell: powershell
+      run: |
+        echo "Binary size information:"
+        Get-Item rclone.exe | Format-List Name, Length
+        $sizeInMB = [math]::Round((Get-Item rclone.exe).Length / 1MB, 2)
+        echo "Size in MB: $sizeInMB"
 
     - name: Test trash flag availability (Unix)
       if: runner.os != 'Windows'
