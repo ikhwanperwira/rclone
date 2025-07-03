@@ -1111,13 +1111,33 @@ func (d *Dir) moveToTrash() error {
 	dirName := filepath.Base(d.Path())
 	uniqueName := fmt.Sprintf("%s_%s", timestamp, dirName)
 
+	// Get the root directory to perform operations
+	root, err := vfs.Root()
+	if err != nil {
+		return fmt.Errorf("failed to get VFS root: %v", err)
+	}
+
+	// Get the trash directory and create it if needed
+	trashDir, err := root.stat(vfs.Opt.TrashDir)
+	if err == ENOENT {
+		// Trash directory doesn't exist, create it
+		trashDir, err = root.Mkdir(vfs.Opt.TrashDir)
+		if err != nil {
+			return fmt.Errorf("failed to create trash directory: %v", err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("failed to stat trash directory: %v", err)
+	} else if !trashDir.IsDir() {
+		return fmt.Errorf("trash path exists but is not a directory")
+	}
+
 	// Build the trash path with unique name
-	trashPath := filepath.Join(vfs.Opt.TrashDir, uniqueName)
+	trashPath := path.Join(vfs.Opt.TrashDir, uniqueName)
 
 	// Move the directory to trash using DirMove
 	srcRemote := d.Path()
 	dstRemote := trashPath
-	err := operations.DirMove(context.TODO(), d.f, srcRemote, dstRemote)
+	err = operations.DirMove(context.TODO(), d.f, srcRemote, dstRemote)
 	if err != nil {
 		return fmt.Errorf("failed to move directory to trash: %v", err)
 	}
