@@ -1102,50 +1102,6 @@ func (d *Dir) Mkdir(name string) (*Dir, error) {
 	return dir, nil
 }
 
-// moveToTrash moves a directory to the trash directory
-func (d *Dir) moveToTrash() error {
-	vfs := d.vfs
-
-	// Create unique timestamp-based name for the directory
-	timestamp := time.Now().Format("20060102_150405_000")
-	dirName := filepath.Base(d.Path())
-	uniqueName := fmt.Sprintf("%s_%s", timestamp, dirName)
-
-	// Get the root directory to perform operations
-	root, err := vfs.Root()
-	if err != nil {
-		return fmt.Errorf("failed to get VFS root: %v", err)
-	}
-
-	// Get the trash directory and create it if needed
-	trashDir, err := root.stat(vfs.Opt.TrashDir)
-	if err == ENOENT {
-		// Trash directory doesn't exist, create it
-		trashDir, err = root.Mkdir(vfs.Opt.TrashDir)
-		if err != nil {
-			return fmt.Errorf("failed to create trash directory: %v", err)
-		}
-	} else if err != nil {
-		return fmt.Errorf("failed to stat trash directory: %v", err)
-	} else if !trashDir.IsDir() {
-		return fmt.Errorf("trash path exists but is not a directory")
-	}
-
-	// Build the trash path with unique name
-	trashPath := path.Join(vfs.Opt.TrashDir, uniqueName)
-
-	// Move the directory to trash using DirMove
-	srcRemote := d.Path()
-	dstRemote := trashPath
-	err = operations.DirMove(context.TODO(), d.f, srcRemote, dstRemote)
-	if err != nil {
-		return fmt.Errorf("failed to move directory to trash: %v", err)
-	}
-
-	fs.Debugf(d.Path(), "Moved directory to trash: %s", trashPath)
-	return nil
-}
-
 // Remove the directory
 func (d *Dir) Remove() error {
 	if d.vfs.Opt.ReadOnly {
@@ -1154,20 +1110,46 @@ func (d *Dir) Remove() error {
 
 	// Check if trash directory is configured
 	if d.vfs.Opt.TrashDir != "" {
-		// Try to move to trash first
-		fs.Debugf(d.Path(), "Attempting to move directory to trash")
-		err := d.moveToTrash()
+		// Create unique timestamp-based name for the directory
+		timestamp := time.Now().Format("20060102_150405_000")
+		dirName := filepath.Base(d.Path())
+		uniqueName := fmt.Sprintf("%s_%s", timestamp, dirName)
+
+		// Get the root directory to perform operations
+		root, err := d.vfs.Root()
 		if err != nil {
-			fs.Errorf(d, "Failed to move directory to trash, proceeding with normal delete: %v", err)
-			// Continue with normal deletion if trash move fails
+			fs.Errorf(d.Path(), "Failed to get VFS root for trash: %v", err)
 		} else {
-			// Successfully moved to trash, remove from parent listing
-			fs.Debugf(d.Path(), "Successfully moved directory to trash")
-			if d.parent != nil {
-				d.parent.delObject(d.Name())
+			// Get the trash directory and create it if needed
+			trashDir, err := root.stat(d.vfs.Opt.TrashDir)
+			if err == ENOENT {
+				// Trash directory doesn't exist, create it
+				trashDir, err = root.Mkdir(d.vfs.Opt.TrashDir)
 			}
-			return nil
+			if err != nil {
+				fs.Errorf(d.Path(), "Failed to access trash directory: %v", err)
+			} else if !trashDir.IsDir() {
+				fs.Errorf(d.Path(), "Trash path exists but is not a directory")
+			} else {
+				// Use the existing Rename logic to move directory to trash
+				srcRemote := d.entry.Remote()
+				dstRemote := path.Join(d.vfs.Opt.TrashDir, uniqueName)
+				
+				err = operations.DirMove(context.TODO(), d.f, srcRemote, dstRemote)
+				if err != nil {
+					fs.Errorf(d.Path(), "Failed to move directory to trash: %v", err)
+				} else {
+					// Successfully moved to trash, remove from parent listing
+					fs.Debugf(d.Path(), "Moved directory to trash: %s", dstRemote)
+					if d.parent != nil {
+						d.parent.delObject(d.Name())
+					}
+					return nil
+				}
+			}
 		}
+		// If we reach here, trash move failed, continue with normal deletion
+		fs.Debugf(d.Path(), "Trash move failed, proceeding with normal delete")
 	}
 
 	// Check directory is empty first (only for normal deletion, not trash)
@@ -1201,24 +1183,47 @@ func (d *Dir) RemoveAll() error {
 
 	// Check if trash directory is configured
 	if d.vfs.Opt.TrashDir != "" {
-		// Try to move to trash first (this will move the whole tree)
-		fs.Debugf(d.Path(), "Attempting to move directory tree to trash")
-		err := d.moveToTrash()
-		if err != nil {
-			fs.Errorf(d, "Failed to move directory to trash, proceeding with individual file deletion: %v", err)
-			// Continue with normal deletion if trash move fails
-		} else {
-			// Successfully moved to trash, remove from parent listing
-			fs.Debugf(d.Path(), "Successfully moved entire directory tree to trash")
-			if d.parent != nil {
-				d.parent.delObject(d.Name())
-			}
-			return nil
-		}
-	}
+		// Create unique timestamp-based name for the directory
+		timestamp := time.Now().Format("20060102_150405_000")
+		dirName := filepath.Base(d.Path())
+		uniqueName := fmt.Sprintf("%s_%s", timestamp, dirName)
 
-	// Remove contents of the directory (only reached if trash move failed or trash not configured)
-	fs.Debugf(d.Path(), "Processing directory contents individually")
+		// Get the root directory to perform operations
+		root, err := d.vfs.Root()
+		if err != nil {
+			fs.Errorf(d.Path(), "Failed to get VFS root for trash: %v", err)
+		} else {
+			// Get the trash directory and create it if needed
+			trashDir, err := root.stat(d.vfs.Opt.TrashDir)
+			if err == ENOENT {
+				// Trash directory doesn't exist, create it
+				trashDir, err = root.Mkdir(d.vfs.Opt.TrashDir)
+			}
+			if err != nil {
+				fs.Errorf(d.Path(), "Failed to access trash directory: %v", err)
+			} else if !trashDir.IsDir() {
+				fs.Errorf(d.Path(), "Trash path exists but is not a directory")
+			} else {
+				// Use DirMove to move the entire tree to trash (this moves everything recursively)
+				srcRemote := d.entry.Remote()
+				dstRemote := path.Join(d.vfs.Opt.TrashDir, uniqueName)
+				
+				err = operations.DirMove(context.TODO(), d.f, srcRemote, dstRemote)
+				if err != nil {
+					fs.Errorf(d.Path(), "Failed to move directory tree to trash: %v", err)
+				} else {
+					// Successfully moved entire tree to trash, remove from parent listing
+					fs.Debugf(d.Path(), "Moved entire directory tree to trash: %s", dstRemote)
+					if d.parent != nil {
+						d.parent.delObject(d.Name())
+					}
+					return nil
+				}
+			}
+		}
+		// If we reach here, trash move failed, continue with normal deletion
+		fs.Debugf(d.Path(), "Trash move failed, processing directory contents individually")
+	}
 	nodes, err := d.ReadDirAll()
 	if err != nil {
 		fs.Errorf(d, "Dir.RemoveAll failed to read directory: %v", err)

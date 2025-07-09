@@ -663,46 +663,6 @@ func (f *File) Sync() error {
 	return nil
 }
 
-// moveToTrash moves a file or directory to the trash directory
-func (f *File) moveToTrash() error {
-	vfs := f.d.vfs
-
-	// Create unique timestamp-based name for the file
-	timestamp := time.Now().Format("20060102_150405_000")
-	fileName := filepath.Base(f.Path())
-	uniqueName := fmt.Sprintf("%s_%s", timestamp, fileName)
-
-	// Get the root directory to perform operations
-	root, err := vfs.Root()
-	if err != nil {
-		return fmt.Errorf("failed to get VFS root: %v", err)
-	}
-
-	// Get the trash directory and create it if needed
-	trashDir, err := root.stat(vfs.Opt.TrashDir)
-	if err == ENOENT {
-		// Trash directory doesn't exist, create it
-		trashDir, err = root.Mkdir(vfs.Opt.TrashDir)
-		if err != nil {
-			return fmt.Errorf("failed to create trash directory: %v", err)
-		}
-	} else if err != nil {
-		return fmt.Errorf("failed to stat trash directory: %v", err)
-	} else if !trashDir.IsDir() {
-		return fmt.Errorf("trash path exists but is not a directory")
-	}
-
-	// Move the file to trash using rename with unique name
-	err = f.rename(context.TODO(), trashDir.(*Dir), uniqueName)
-	if err != nil {
-		return fmt.Errorf("failed to move file to trash: %v", err)
-	}
-
-	trashPath := filepath.Join(vfs.Opt.TrashDir, uniqueName)
-	fs.Debugf(f.Path(), "Moved to trash: %s", trashPath)
-	return nil
-}
-
 // Remove the file
 func (f *File) Remove() (err error) {
 	defer log.Trace(f.Path(), "")("err=%v", &err)
@@ -716,15 +676,41 @@ func (f *File) Remove() (err error) {
 
 	// Check if trash directory is configured
 	if d.vfs.Opt.TrashDir != "" {
-		// Try to move to trash first
-		err = f.moveToTrash()
+		// Create unique timestamp-based name for the file
+		timestamp := time.Now().Format("20060102_150405_000")
+		fileName := filepath.Base(f.Path())
+		uniqueName := fmt.Sprintf("%s_%s", timestamp, fileName)
+
+		// Get the root directory to perform operations
+		root, err := d.vfs.Root()
 		if err != nil {
-			fs.Errorf(f.Path(), "Failed to move to trash, proceeding with delete: %v", err)
-			// Continue with normal deletion if trash move fails
+			fs.Errorf(f.Path(), "Failed to get VFS root for trash: %v", err)
 		} else {
-			// Successfully moved to trash, we're done
-			return nil
+			// Get the trash directory and create it if needed
+			trashDir, err := root.stat(d.vfs.Opt.TrashDir)
+			if err == ENOENT {
+				// Trash directory doesn't exist, create it
+				trashDir, err = root.Mkdir(d.vfs.Opt.TrashDir)
+			}
+			if err != nil {
+				fs.Errorf(f.Path(), "Failed to access trash directory: %v", err)
+			} else if !trashDir.IsDir() {
+				fs.Errorf(f.Path(), "Trash path exists but is not a directory")
+			} else {
+				// Move the file to trash using rename with unique name
+				err = f.rename(context.TODO(), trashDir.(*Dir), uniqueName)
+				if err != nil {
+					fs.Errorf(f.Path(), "Failed to move to trash: %v", err)
+				} else {
+					// Successfully moved to trash
+					trashPath := path.Join(d.vfs.Opt.TrashDir, uniqueName)
+					fs.Debugf(f.Path(), "Moved to trash: %s", trashPath)
+					return nil
+				}
+			}
 		}
+		// If we reach here, trash move failed, continue with normal deletion
+		fs.Debugf(f.Path(), "Trash move failed, proceeding with normal delete")
 	}
 
 	// Remove the object from the cache
